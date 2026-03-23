@@ -8,7 +8,7 @@ import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { NewMessage, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -23,6 +23,8 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+  storeMessage: (msg: NewMessage) => void;
+  enqueueExternalEvent: (chatJid: string) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -145,6 +147,40 @@ export function startIpcWatcher(deps: IpcDeps): void {
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
       }
+
+      // Process external events from this group's input/ directory
+      const inputDir = path.join(ipcBaseDir, sourceGroup, 'input');
+      try {
+        if (fs.existsSync(inputDir)) {
+          const inputFiles = fs
+            .readdirSync(inputDir)
+            .filter((f) => f.endsWith('.json'));
+          for (const file of inputFiles) {
+            const filePath = path.join(inputDir, file);
+            try {
+              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              await processExternalEvent(data, sourceGroup, deps);
+              fs.unlinkSync(filePath);
+            } catch (err) {
+              logger.error(
+                { file, sourceGroup, err },
+                'Error processing IPC input event',
+              );
+              const errorDir = path.join(ipcBaseDir, 'errors');
+              fs.mkdirSync(errorDir, { recursive: true });
+              fs.renameSync(
+                filePath,
+                path.join(errorDir, `${sourceGroup}-${file}`),
+              );
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(
+          { err, sourceGroup },
+          'Error reading IPC input directory',
+        );
+      }
     }
 
     setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
@@ -152,6 +188,57 @@ export function startIpcWatcher(deps: IpcDeps): void {
 
   processIpcFiles();
   logger.info('IPC watcher started (per-group namespaces)');
+}
+
+const MAX_EXTERNAL_PROMPT_LENGTH = 8000;
+
+export async function processExternalEvent(
+  data: { type?: string; prompt?: string; event?: unknown; timestamp?: string },
+  sourceGroup: string,
+  deps: IpcDeps,
+): Promise<void> {
+  const registeredGroups = deps.registeredGroups();
+
+  // Find the chatJid for this group folder
+  const entry = Object.entries(registeredGroups).find(
+    ([, g]) => g.folder === sourceGroup,
+  );
+  if (!entry) {
+    logger.warn(
+      { sourceGroup },
+      'External event for unregistered group, ignored',
+    );
+    return;
+  }
+  const [chatJid] = entry;
+
+  // Build prompt, truncate if too large
+  let prompt = data.prompt || JSON.stringify(data.event || data);
+  if (prompt.length > MAX_EXTERNAL_PROMPT_LENGTH) {
+    prompt =
+      prompt.slice(0, MAX_EXTERNAL_PROMPT_LENGTH) + '\n\n[... truncated]';
+  }
+
+  const syntheticMessage: NewMessage = {
+    id: `ext-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    chat_jid: chatJid,
+    sender: 'event-router',
+    sender_name: 'EventRouter',
+    content: prompt,
+    // Always use current time to avoid cursor ordering issues
+    // (external timestamps could be in the past or future)
+    timestamp: new Date().toISOString(),
+    is_from_me: false,
+    is_bot_message: false,
+  };
+
+  deps.storeMessage(syntheticMessage);
+  deps.enqueueExternalEvent(chatJid);
+
+  logger.info(
+    { chatJid, sourceGroup, type: data.type, promptLength: prompt.length },
+    'External event injected as message',
+  );
 }
 
 export async function processTaskIpc(

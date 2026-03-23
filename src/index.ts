@@ -168,8 +168,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
-  // For non-main groups, check if trigger is required and present
-  if (!isMainGroup && group.requiresTrigger !== false) {
+  // For non-main groups, check if trigger is required and present.
+  // External events (from IPC input/) bypass trigger check.
+  const hasExternalEvent = queue.hasExternalEvent(chatJid);
+  if (!isMainGroup && group.requiresTrigger !== false && !hasExternalEvent) {
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
       (m) =>
@@ -245,13 +247,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     // If we already sent output to the user, don't roll back the cursor —
     // the user got their response and re-processing would send duplicates.
     if (outputSentToUser) {
+      queue.consumeExternalEvent(chatJid);
       logger.warn(
         { group: group.name },
         'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
       );
       return true;
     }
-    // Roll back cursor so retries can re-process these messages
+    // Roll back cursor so retries can re-process these messages.
+    // Do NOT consume external event — retry needs the bypass flag.
     lastAgentTimestamp[chatJid] = previousCursor;
     saveState();
     logger.warn(
@@ -261,6 +265,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return false;
   }
 
+  queue.consumeExternalEvent(chatJid);
   return true;
 }
 
@@ -631,6 +636,9 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    storeMessage,
+    enqueueExternalEvent: (chatJid: string) =>
+      queue.enqueueExternalEvent(chatJid),
     onTasksChanged: () => {
       const tasks = getAllTasks();
       const taskRows = tasks.map((t) => ({

@@ -34,6 +34,7 @@ export class GroupQueue {
   private processMessagesFn: ((groupJid: string) => Promise<boolean>) | null =
     null;
   private shuttingDown = false;
+  private externalEventCounts = new Map<string, number>();
 
   private getGroup(groupJid: string): GroupState {
     let state = this.groups.get(groupJid);
@@ -57,6 +58,27 @@ export class GroupQueue {
 
   setProcessMessagesFn(fn: (groupJid: string) => Promise<boolean>): void {
     this.processMessagesFn = fn;
+  }
+
+  enqueueExternalEvent(groupJid: string): void {
+    this.externalEventCounts.set(
+      groupJid,
+      (this.externalEventCounts.get(groupJid) ?? 0) + 1,
+    );
+    this.enqueueMessageCheck(groupJid);
+  }
+
+  hasExternalEvent(groupJid: string): boolean {
+    return (this.externalEventCounts.get(groupJid) ?? 0) > 0;
+  }
+
+  consumeExternalEvent(groupJid: string): void {
+    const count = this.externalEventCounts.get(groupJid) ?? 0;
+    if (count <= 1) {
+      this.externalEventCounts.delete(groupJid);
+    } else {
+      this.externalEventCounts.set(groupJid, count - 1);
+    }
   }
 
   enqueueMessageCheck(groupJid: string): void {
