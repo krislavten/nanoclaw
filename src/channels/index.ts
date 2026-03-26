@@ -10,4 +10,7 @@ import './slack.js';
 
 // telegram
 
+// wecom
+import './wecom.js';
+
 // whatsapp
