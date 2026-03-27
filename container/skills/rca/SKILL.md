@@ -10,11 +10,12 @@ allowed-tools: Bash(*)
 
 ## 前置检查
 
-开始分析前，确认 mcp-query.ts 可用：
+开始分析前，确认工具可用：
 ```bash
-ls /workspace/extra/tentaclaw-scripts/mcp-query.ts
+which tentaclaw-mcp && tentaclaw-mcp 2>&1 | head -1
 ```
-如果文件不存在，告知用户 "TentaClaw scripts 未挂载，无法执行 RCA。请配置 additionalMounts 挂载 TentaClaw/scripts 目录。" 并停止。
+如果 `tentaclaw-mcp` 不存在，告知用户 "tentaclaw-mcp 未安装。请确认容器镜像包含 TentaClaw CLI 工具。" 并停止。
+如果提示 `MCP_URL and MCP_ENV environment variables are required`，告知用户 "MCP 未配置。请运行 /add-rca 配置 MCP 连接。" 并停止。
 
 ## 触发条件
 
@@ -29,46 +30,36 @@ ls /workspace/extra/tentaclaw-scripts/mcp-query.ts
 
 ## 工具
 
-使用 `npx tsx /workspace/extra/tentaclaw-scripts/mcp-query.ts` 查询 Octopus 可观测数据。
-
-### 环境变量
-
-查询前先设置环境变量（如未设置则使用默认值）：
-```bash
-export MCP_URL="${MCP_URL:-https://octopus-mcp-test.zhenguanyu.com/mcp}"
-export MCP_ENV="${MCP_ENV:-online}"
-```
+使用 `tentaclaw-mcp` 查询可观测数据（需要 `MCP_URL` 和 `MCP_ENV` 环境变量已配置）。
 
 ### 查询命令
 
 ```bash
-MCP="npx tsx /workspace/extra/tentaclaw-scripts/mcp-query.ts"
-
 # Trace 查询
-$MCP trace_search "service=X"                    # 全量 span
-$MCP trace_slow X                                # 慢 span (>1000ms)
-$MCP trace_exit X                                # 出口 span（下游调用）
-$MCP trace_exit_slow X                           # 慢出口 span (>500ms)
-$MCP trace_error X                               # 错误 span
-$MCP trace_entry X                               # 入口 span
-$MCP trace_search "service=X AND duration>5000"  # 自定义查询
+tentaclaw-mcp trace_search "service=X"                    # 全量 span
+tentaclaw-mcp trace_slow X                                # 慢 span (>1000ms)
+tentaclaw-mcp trace_exit X                                # 出口 span（下游调用）
+tentaclaw-mcp trace_exit_slow X                           # 慢出口 span (>500ms)
+tentaclaw-mcp trace_error X                               # 错误 span
+tentaclaw-mcp trace_entry X                               # 入口 span
+tentaclaw-mcp trace_search "service=X AND duration>5000"  # 自定义查询
 
 # Metric 查询
-$MCP metric_search "p99(trace.service.duration{service=X})"
-$MCP metric_search "p50(trace.service.duration{service=X})"
-$MCP metric_search "as_rate(sum(trace.service.errors{service=X}))"
+tentaclaw-mcp metric_search "p99(trace.service.duration{service=X})"
+tentaclaw-mcp metric_search "p50(trace.service.duration{service=X})"
+tentaclaw-mcp metric_search "as_rate(sum(trace.service.errors{service=X}))"
 
 # 日志 / 告警 / 错误追踪
-$MCP log_search "service=X AND level=error"
-$MCP alarm_search "X"
-$MCP error_track_search "service=X"
+tentaclaw-mcp log_search "service=X AND level=error"
+tentaclaw-mcp alarm_search "X"
+tentaclaw-mcp error_track_search "service=X"
 ```
 
 ## 预算控制
 
 - **最多 30 次 MCP 查询**。到 25 次时停止新查询，用已有数据综合分析。
 - **120 秒超时**。如果分析不完整，报告已有发现并标注置信度较低。
-- 自行计数每次 `mcp-query.ts` 调用。
+- 自行计数每次 `tentaclaw-mcp` 调用。
 
 ## 分析流程
 
